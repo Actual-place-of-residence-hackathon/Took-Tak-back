@@ -19,7 +19,9 @@ jobs:
           port: ${{ secrets.PORT }}
 
           script: |
-            cd ~/Took-Tak-back
+            source ~/.bashrc
+
+            cd ~/Took-Tak-back/Took-Tak
 
             git pull origin main
 
