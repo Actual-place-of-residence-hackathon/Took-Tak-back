@@ -13,7 +13,7 @@ jobs:
       - name: Deploy Backend through Bastion
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.BASTION_HOST }}
+          host: ${{ secrets.HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
