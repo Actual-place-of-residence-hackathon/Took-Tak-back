@@ -54,6 +54,7 @@ exports.getHeatmap = async (req, res, next) => {
   try {
     const rows = await sequelize.query(
       `SELECT z.id AS zone_id, z.name AS zone,
+              z.pin_x, z.pin_y,
               f.id AS floor_id, f.name AS floor,
               b.id AS building_id, b.name AS building,
               COUNT(r.id) AS report_count
@@ -63,7 +64,7 @@ exports.getHeatmap = async (req, res, next) => {
     LEFT JOIN reports   r ON r.zone_id = z.id
         WHERE ($1::bigint IS NULL OR b.id = $1)
           AND ($2::bigint IS NULL OR f.id = $2)
-        GROUP BY z.id, z.name, f.id, f.name, b.id, b.name
+        GROUP BY z.id, z.name, z.pin_x, z.pin_y, f.id, f.name, b.id, b.name
         ORDER BY COUNT(r.id) DESC, b.name, f.name, z.name`,
       {
         bind: [parseId(req.query.building_id), parseId(req.query.floor_id)],

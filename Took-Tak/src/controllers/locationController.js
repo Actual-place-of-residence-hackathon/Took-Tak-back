@@ -49,7 +49,7 @@ exports.getZones = async (req, res, next) => {
 
     const zones = await Zone.findAll({
       where: { floor_id: floorId },
-      attributes: ['id', 'name', 'floor_id'],
+      attributes: ['id', 'name', 'floor_id', 'pin_x', 'pin_y'],
       order: [['name', 'ASC']],
     });
     return res.status(200).json({ zones });
@@ -67,7 +67,7 @@ exports.getTree = async (req, res, next) => {
         model: Floor,
         as: 'floors',
         attributes: ['id', 'name'],
-        include: [{ model: Zone, as: 'zones', attributes: ['id', 'name'] }],
+        include: [{ model: Zone, as: 'zones', attributes: ['id', 'name', 'pin_x', 'pin_y'] }],
       }],
       order: [
         ['name', 'ASC'],

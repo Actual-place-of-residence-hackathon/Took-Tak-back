@@ -18,6 +18,7 @@ exports.getZonePins = async (req, res, next) => {
   try {
     const rows = await sequelize.query(
       `SELECT z.id   AS zone_id,     z.name AS zone,
+              z.pin_x, z.pin_y,
               f.id   AS floor_id,    f.name AS floor,
               b.id   AS building_id, b.name AS building,
               MIN(r.urgency)                                     AS pin_urgency,
@@ -30,7 +31,7 @@ exports.getZonePins = async (req, res, next) => {
         WHERE r.status <> 'done'
           AND ($1::bigint IS NULL OR b.id = $1)
           AND ($2::bigint IS NULL OR f.id = $2)
-        GROUP BY z.id, z.name, f.id, f.name, b.id, b.name
+        GROUP BY z.id, z.name, z.pin_x, z.pin_y, f.id, f.name, b.id, b.name
         ORDER BY MIN(r.urgency) ASC NULLS LAST, COUNT(*) DESC`,
       {
         bind: [parseId(req.query.building_id), parseId(req.query.floor_id)],

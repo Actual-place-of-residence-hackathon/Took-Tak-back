@@ -9,6 +9,7 @@ const {
   Building,
   Floor,
   Zone,
+  User,
 } = require('../models');
 const { analyzeReport } = require('../utils/aiService');
 const {
@@ -187,7 +188,8 @@ exports.getReports = async (req, res, next) => {
               r.created_at, r.updated_at, r.group_id,
               b.id AS building_id, b.name AS building,
               f.id AS floor_id,    f.name AS floor,
-              z.id AS zone_id,     z.name AS zone,
+              z.id AS zone_id,     z.name AS zone, z.pin_x, z.pin_y,
+              u.id AS reporter_id, u.name AS reporter_name,
               (SELECT p.url FROM report_photos p
                 WHERE p.report_id = r.id AND p.kind = 'report'
                 ORDER BY p.sort_order LIMIT 1) AS thumbnail
@@ -195,6 +197,7 @@ exports.getReports = async (req, res, next) => {
          JOIN buildings b ON b.id = r.building_id
          JOIN floors    f ON f.id = r.floor_id
          JOIN zones     z ON z.id = r.zone_id
+         JOIN users     u ON u.id = r.reporter_id
         WHERE ($1::bigint        IS NULL OR r.reporter_id = $1)
           AND ($2::text          IS NULL OR r.type = $2)
           AND ($3::urgency_level IS NULL OR r.urgency = $3)
@@ -242,7 +245,8 @@ exports.getReportById = async (req, res, next) => {
       include: [
         { model: Building, as: 'building', attributes: ['id', 'name'] },
         { model: Floor, as: 'floor', attributes: ['id', 'name'] },
-        { model: Zone, as: 'zone', attributes: ['id', 'name'] },
+        { model: Zone, as: 'zone', attributes: ['id', 'name', 'pin_x', 'pin_y'] },
+        { model: User, as: 'reporter', attributes: ['id', 'name'] },
         {
           model: ReportPhoto,
           as: 'photos',
