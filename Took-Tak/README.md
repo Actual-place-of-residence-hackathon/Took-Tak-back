@@ -84,3 +84,5 @@ Took-Tak/
 - [ ] PostgreSQL 연결용 DB 구조로 전환
 - [ ] 프론트 연동용 응답 JSON 표준화
 - [ ] 실제 배포 환경용 `.env` 분리
+
+test
