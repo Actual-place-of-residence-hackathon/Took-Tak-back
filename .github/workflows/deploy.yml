@@ -10,21 +10,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to EC2
+      - name: Deploy Backend through Bastion
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
+          host: ${{ secrets.BASTION_HOST }}
+          username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.PORT }}
+          port: 22
 
           script: |
-            source ~/.bashrc
+            ssh -o StrictHostKeyChecking=no -i ~/mybackend.pem ubuntu@10.28.3.146 << 'EOF'
+              cd ~/Took-Tak-back/Took-Tak
 
-            cd ~/Took-Tak-back/Took-Tak
+              git pull origin main
 
-            git pull origin main
+              npm install
 
-            npm install
-
-            pm2 restart tooktak-backend
+              pm2 restart tooktak-backend
+            EOF
