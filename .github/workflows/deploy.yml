@@ -19,15 +19,10 @@ jobs:
           port: ${{ secrets.PORT }}
 
           script: |
-            whoami
-            pwd
-            ls /home
-            export PATH=$PATH:/usr/bin
-
-            cd /home/ubuntu/Took-Tak-back
+            cd ~/Took-Tak-back
 
             git pull origin main
 
-            /usr/bin/npm install
+            npm install
 
-            /usr/bin/pm2 restart tooktak-backend
+            pm2 restart tooktak-backend
