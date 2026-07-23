@@ -1,224 +1,490 @@
-const { Report, ReportPhoto, ReportStatusHistory, Action, Building, Floor, Zone } = require('../models');
-const { Op } = require('sequelize');
+const { QueryTypes } = require('sequelize');
+const {
+  sequelize,
+  Report,
+  ReportPhoto,
+  ReportStatusHistory,
+  ReportAction,
+  ReportGroup,
+  Building,
+  Floor,
+  Zone,
+} = require('../models');
+const { analyzeReport } = require('../utils/aiService');
+const {
+  REPORT_STATUSES,
+  URGENCY_LEVELS,
+  MAX_REPORT_PHOTOS,
+  sameId,
+  parseId,
+  parseEnumValue,
+  parseDate,
+  parsePhotoUrls,
+  parseDescription,
+} = require('../utils/validators');
 
-const VALID_STATUSES = ['received', 'checking', 'processing', 'done', 'hold'];
+// 정렬 옵션 화이트리스트.
+// ORDER BY 는 바인드 파라미터로 넘길 수 없어 문자열을 직접 끼워 넣습니다.
+// 반드시 이 맵의 값만 사용해야 SQL 인젝션이 막힙니다.
+const SORT_OPTIONS = {
+  // urgency ENUM 은 선언 순서(high → medium → low)대로 정렬됩니다.
+  // 아직 분류되지 않은(NULL) 건은 뒤로 보냅니다.
+  urgency: 'r.urgency ASC NULLS LAST, r.created_at DESC',
+  latest: 'r.created_at DESC',
+  location: 'b.name ASC, f.name ASC, z.name ASC, r.created_at DESC',
+};
 
-// 1. 신고 등록
-exports.createReport = async (req, res) => {
+function badRequest(message) {
+  const err = new Error(message);
+  err.status = 400;
+  return err;
+}
+
+// ---------------------------------------------------------------------------
+// 1. 신고 등록 (C3)
+// ---------------------------------------------------------------------------
+exports.createReport = async (req, res, next) => {
   try {
-    const reporter_id = req.user?.id;
-    const {
-      building_id,
-      floor_id,
-      zone_id,
-      part,
-      description,
-      type,
-      urgency,
-      ai_type,
-      ai_urgency,
-      ai_reasoning,
-      ai_suggested_action,
-      photoUrls = [],
-    } = req.body;
+    const reporterId = req.user.id;
 
-    if (!reporter_id || !building_id || !floor_id || !zone_id) {
-      return res.status(400).json({ message: 'reporter_id, building_id, floor_id, zone_id는 필수입니다.' });
+    const buildingId = parseId(req.body.building_id);
+    const floorId = parseId(req.body.floor_id);
+    const zoneId = parseId(req.body.zone_id);
+
+    if (!buildingId || !floorId || !zoneId) {
+      return res.status(400).json({ message: 'building_id, floor_id, zone_id는 필수입니다.' });
     }
 
-    const [building, floor, zone] = await Promise.all([
-      Building.findByPk(building_id),
-      Floor.findByPk(floor_id),
-      Zone.findByPk(zone_id),
-    ]);
-
-    if (!building || !floor || !zone) {
-      return res.status(400).json({ message: '유효하지 않은 건물/층/구역 정보입니다.' });
+    const description = parseDescription(req.body.description);
+    if (!description.ok) {
+      return res.status(400).json({ message: description.message });
     }
 
-    const report = await Report.create({
-      reporter_id,
-      building_id,
-      floor_id,
-      zone_id,
-      part,
-      description,
-      type: type || ai_type || null,
-      urgency: urgency || ai_urgency || null,
-      ai_type: ai_type || null,
-      ai_urgency: ai_urgency || null,
-      ai_reasoning: ai_reasoning || null,
-      ai_suggested_action: ai_suggested_action || null,
+    const part = typeof req.body.part === 'string' && req.body.part.trim()
+      ? req.body.part.trim()
+      : null;
+
+    const photoUrls = parsePhotoUrls(req.body.photoUrls, MAX_REPORT_PHOTOS);
+
+    // 위치 계층 검증.
+    // reports 는 building/floor/zone 을 모두 들고 있지만 서로 맞는지 보장하는
+    // 제약이 없어서, 다른 건물의 zone_id 를 넣어도 스키마만으로는 안 막힙니다.
+    const zone = await Zone.findByPk(zoneId, {
+      include: [{
+        model: Floor,
+        as: 'floor',
+        include: [{ model: Building, as: 'building' }],
+      }],
     });
 
-    if (Array.isArray(photoUrls) && photoUrls.length > 0) {
-      const photos = photoUrls.slice(0, 3).map((url, index) => ({
+    if (!zone || !zone.floor || !zone.floor.building
+      || !sameId(zone.floor_id, floorId)
+      || !sameId(zone.floor.building_id, buildingId)) {
+      return res.status(400).json({ message: '유효하지 않은 건물/층/구역 조합입니다.' });
+    }
+
+    // AI 분류는 서버가 만듭니다.
+    // 클라이언트가 보낸 ai_type / ai_urgency 등은 신뢰하지 않고 무시합니다.
+    // (기능명세 16-10)
+    let ai = null;
+    try {
+      ai = await analyzeReport({ description: description.value, photoUrls });
+    } catch (err) {
+      // 기능명세 9.4: AI 실패 시 재시도/대체 처리 방식 미정.
+      // 임시로 신고 접수 자체는 막지 않고 분류를 비운 채 저장합니다.
+      // 이후 C4(AI 결과 나중 입력)로 채울 수 있습니다.
+      console.error('[ai] 분석 실패 — 분류 없이 저장합니다:', err.message);
+    }
+
+    // 사진/이력까지 한 트랜잭션으로 묶습니다.
+    // 중간에 실패하면 "이력 없는 신고"가 남아 처리 타임라인이 깨집니다.
+    const reportId = await sequelize.transaction(async (t) => {
+      const report = await Report.create({
+        reporter_id: reporterId,
+        building_id: buildingId,
+        floor_id: floorId,
+        zone_id: zoneId,
+        part,
+        description: description.value,
+        status: 'received',
+        // 최종값은 AI 값으로 초기화하고, 이후 관리자가 A6 으로 덮어씁니다.
+        type: ai ? ai.type : null,
+        urgency: ai ? ai.urgency : null,
+        ai_type: ai ? ai.type : null,
+        ai_urgency: ai ? ai.urgency : null,
+        ai_summary: ai ? ai.summary : null,
+        ai_reasoning: ai ? ai.reasoning : null,
+        ai_suggested_action: ai ? ai.suggested_action : null,
+      }, { transaction: t });
+
+      if (photoUrls.length > 0) {
+        await ReportPhoto.bulkCreate(
+          photoUrls.map((url, index) => ({
+            report_id: report.id,
+            url,
+            kind: 'report',
+            sort_order: index,
+          })),
+          { transaction: t },
+        );
+      }
+
+      await ReportStatusHistory.create({
         report_id: report.id,
-        url,
-        kind: 'report',
-        sort_order: index,
-      }));
-      await ReportPhoto.bulkCreate(photos);
-    }
+        from_status: null,
+        to_status: 'received',
+        changed_by: reporterId,
+      }, { transaction: t });
 
-    await ReportStatusHistory.create({
-      report_id: report.id,
-      from_status: null,
-      to_status: 'received',
-      changed_by: reporter_id,
+      return report.id;
     });
 
-    return res.status(201).json({ message: '신고가 접수되었습니다.', reportId: report.id });
+    return res.status(201).json({ message: '신고가 접수되었습니다.', reportId });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: '신고 등록 중 오류가 발생했습니다.', error: error.message });
+    return next(error);
   }
 };
 
-// 2. 신고 목록 조회
-exports.getReports = async (req, res) => {
+// ---------------------------------------------------------------------------
+// 2. 신고 목록 (A2 다중 필터/정렬 + C5 내 신고 목록)
+//    학생이면 본인 신고로 자동 제한됩니다.
+// ---------------------------------------------------------------------------
+exports.getReports = async (req, res, next) => {
   try {
-    const { status } = req.query;
-    const where = {};
+    const isStudent = req.user.role === 'student';
 
-    if (req.user.role === 'student') {
-      where.reporter_id = req.user.id;
+    const status = parseEnumValue(req.query.status, REPORT_STATUSES);
+    if (status === undefined) {
+      throw badRequest(`status는 ${REPORT_STATUSES.join(', ')} 중 하나여야 합니다.`);
     }
 
-    if (status) {
-      where.status = status;
+    const urgency = parseEnumValue(req.query.urgency, URGENCY_LEVELS);
+    if (urgency === undefined) {
+      throw badRequest(`urgency는 ${URGENCY_LEVELS.join(', ')} 중 하나여야 합니다.`);
     }
 
-    const reports = await Report.findAll({
-      where,
-      include: [
-        { model: Building, attributes: ['id', 'name'] },
-        { model: Floor, attributes: ['id', 'name'] },
-        { model: Zone, attributes: ['id', 'name'] },
-      ],
-      order: [['created_at', 'DESC']],
-    });
+    const from = parseDate(req.query.from);
+    if (from === undefined) throw badRequest('from은 ISO 날짜 형식이어야 합니다.');
 
-    return res.status(200).json(reports);
+    const to = parseDate(req.query.to);
+    if (to === undefined) throw badRequest('to는 ISO 날짜 형식이어야 합니다.');
+
+    const type = typeof req.query.type === 'string' && req.query.type.trim()
+      ? req.query.type.trim()
+      : null;
+
+    const sortKey = req.query.sort || (isStudent ? 'latest' : 'urgency');
+    const orderBy = SORT_OPTIONS[sortKey];
+    if (!orderBy) {
+      throw badRequest(`sort는 ${Object.keys(SORT_OPTIONS).join(', ')} 중 하나여야 합니다.`);
+    }
+
+    const limit = Math.min(parseId(req.query.limit) || 50, 200);
+    const offset = parseId(req.query.offset) || 0;
+
+    const rows = await sequelize.query(
+      `SELECT r.id, r.type, r.urgency, r.status, r.part, r.description,
+              r.created_at, r.updated_at, r.group_id,
+              b.id AS building_id, b.name AS building,
+              f.id AS floor_id,    f.name AS floor,
+              z.id AS zone_id,     z.name AS zone,
+              (SELECT p.url FROM report_photos p
+                WHERE p.report_id = r.id AND p.kind = 'report'
+                ORDER BY p.sort_order LIMIT 1) AS thumbnail
+         FROM reports r
+         JOIN buildings b ON b.id = r.building_id
+         JOIN floors    f ON f.id = r.floor_id
+         JOIN zones     z ON z.id = r.zone_id
+        WHERE ($1::bigint        IS NULL OR r.reporter_id = $1)
+          AND ($2::text          IS NULL OR r.type = $2)
+          AND ($3::urgency_level IS NULL OR r.urgency = $3)
+          AND ($4::bigint        IS NULL OR r.building_id = $4)
+          AND ($5::bigint        IS NULL OR r.floor_id = $5)
+          AND ($6::bigint        IS NULL OR r.zone_id = $6)
+          AND ($7::report_status IS NULL OR r.status = $7)
+          AND ($8::timestamptz   IS NULL OR r.created_at >= $8)
+          AND ($9::timestamptz   IS NULL OR r.created_at <  $9)
+        ORDER BY ${orderBy}
+        LIMIT $10 OFFSET $11`,
+      {
+        bind: [
+          isStudent ? req.user.id : null,
+          type,
+          urgency,
+          parseId(req.query.building_id),
+          parseId(req.query.floor_id),
+          parseId(req.query.zone_id),
+          status,
+          from,
+          to,
+          limit,
+          offset,
+        ],
+        type: QueryTypes.SELECT,
+      },
+    );
+
+    return res.status(200).json({ reports: rows, limit, offset, count: rows.length });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: '신고 목록 조회 중 오류가 발생했습니다.', error: error.message });
+    return next(error);
   }
 };
 
-// 3. 신고 상세 조회
-exports.getReportById = async (req, res) => {
+// ---------------------------------------------------------------------------
+// 3. 신고 상세 (A5 원본 데이터 + C6-a 타임라인 + C6-b AI 근거 + C6-c 조치 결과)
+// ---------------------------------------------------------------------------
+exports.getReportById = async (req, res, next) => {
   try {
-    const report = await Report.findByPk(req.params.id, {
+    const id = parseId(req.params.id);
+    if (!id) throw badRequest('유효하지 않은 신고 id 입니다.');
+
+    const report = await Report.findByPk(id, {
       include: [
-        { model: Building, attributes: ['id', 'name'] },
-        { model: Floor, attributes: ['id', 'name'] },
-        { model: Zone, attributes: ['id', 'name'] },
-        { model: ReportPhoto, attributes: ['id', 'url', 'kind', 'sort_order'], as: 'photos' },
-        { model: Action, attributes: ['id', 'content', 'admin_id', 'created_at'] },
+        { model: Building, as: 'building', attributes: ['id', 'name'] },
+        { model: Floor, as: 'floor', attributes: ['id', 'name'] },
+        { model: Zone, as: 'zone', attributes: ['id', 'name'] },
+        {
+          model: ReportPhoto,
+          as: 'photos',
+          attributes: ['id', 'url', 'kind', 'sort_order'],
+        },
+        {
+          // ※ 연관을 as 로 정의했으면 include 에도 반드시 as 를 써야 합니다.
+          //   빠지면 Sequelize 가 EagerLoadingError 를 던져 500 이 납니다.
+          model: ReportAction,
+          as: 'actions',
+          attributes: ['id', 'content', 'admin_id', 'created_at'],
+        },
       ],
+      order: [[{ model: ReportPhoto, as: 'photos' }, 'sort_order', 'ASC']],
     });
 
     if (!report) {
       return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
     }
 
-    if (req.user.role === 'student' && report.reporter_id !== req.user.id) {
+    // 학생은 본인 신고만 볼 수 있습니다. (기능명세 13: 권한 분리)
+    if (req.user.role === 'student' && !sameId(report.reporter_id, req.user.id)) {
       return res.status(403).json({ message: '권한이 없습니다.' });
     }
 
-    const statuses = await ReportStatusHistory.findAll({
+    const statusHistory = await ReportStatusHistory.findAll({
       where: { report_id: report.id },
       order: [['changed_at', 'ASC']],
     });
 
-    return res.status(200).json({ report, status_history: statuses });
+    return res.status(200).json({ report, status_history: statusHistory });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: '신고 상세 조회 중 오류가 발생했습니다.', error: error.message });
+    return next(error);
   }
 };
 
-// 4. 상태 변경 (관리자 전용)
-exports.updateStatus = async (req, res) => {
+// ---------------------------------------------------------------------------
+// 4. 상태 변경 (A8) — 관리자 전용
+// ---------------------------------------------------------------------------
+exports.updateStatus = async (req, res, next) => {
   try {
-    const { status, reason } = req.body;
-    const report = await Report.findByPk(req.params.id);
+    const id = parseId(req.params.id);
+    if (!id) throw badRequest('유효하지 않은 신고 id 입니다.');
 
-    if (!report) {
-      return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
+    const status = parseEnumValue(req.body.status, REPORT_STATUSES);
+    if (!status) {
+      throw badRequest(`status는 ${REPORT_STATUSES.join(', ')} 중 하나여야 합니다.`);
     }
 
-    if (!VALID_STATUSES.includes(status)) {
-      return res.status(400).json({ message: '유효하지 않은 상태입니다.' });
-    }
+    const reason = typeof req.body.reason === 'string' && req.body.reason.trim()
+      ? req.body.reason.trim()
+      : null;
 
-    const previousStatus = report.status;
-    report.status = status;
-    report.updated_at = new Date();
-    await report.save();
+    const result = await sequelize.transaction(async (t) => {
+      // 잠금을 걸어 두 관리자가 동시에 바꿀 때 이력의 from_status 가 어긋나는 것을 막습니다.
+      const report = await Report.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!report) return null;
 
-    await ReportStatusHistory.create({
-      report_id: report.id,
-      from_status: previousStatus,
-      to_status: status,
-      reason: reason || null,
-      changed_by: req.user.id,
-    });
+      const previousStatus = report.status;
+      if (previousStatus === status) {
+        return { report, changed: false };
+      }
 
-    return res.status(200).json({ message: '상태가 변경되었습니다.', report });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: '상태 변경 중 오류가 발생했습니다.', error: error.message });
-  }
-};
+      report.status = status;
+      report.updated_at = new Date();
+      await report.save({ transaction: t });
 
-// 5. 조치 결과 등록 및 자동 완료 처리 (관리자 전용)
-exports.addAction = async (req, res) => {
-  try {
-    const { content, photoUrls = [] } = req.body;
-    const report = await Report.findByPk(req.params.id);
-
-    if (!report) {
-      return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
-    }
-
-    if (!content) {
-      return res.status(400).json({ message: '조치 내용이 필요합니다.' });
-    }
-
-    await Action.create({
-      report_id: report.id,
-      content,
-      admin_id: req.user.id,
-    });
-
-    if (Array.isArray(photoUrls) && photoUrls.length > 0) {
-      const actionPhotos = photoUrls.map((url, index) => ({
+      await ReportStatusHistory.create({
         report_id: report.id,
-        url,
-        kind: 'action',
-        sort_order: index,
-      }));
-      await ReportPhoto.bulkCreate(actionPhotos);
+        from_status: previousStatus,
+        to_status: status,
+        reason,
+        changed_by: req.user.id,
+      }, { transaction: t });
+
+      return { report, changed: true };
+    });
+
+    if (!result) {
+      return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
     }
 
-    const previousStatus = report.status;
-    report.status = 'done';
-    report.updated_at = new Date();
-    await report.save();
-
-    await ReportStatusHistory.create({
-      report_id: report.id,
-      from_status: previousStatus,
-      to_status: 'done',
-      reason: '조치 완료',
-      changed_by: req.user.id,
+    return res.status(200).json({
+      message: result.changed ? '상태가 변경되었습니다.' : '이미 해당 상태입니다.',
+      report: result.report,
     });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 5. 조치 결과 등록 + 자동 완료 처리 (A9) — 관리자 전용
+// ---------------------------------------------------------------------------
+exports.addAction = async (req, res, next) => {
+  try {
+    const id = parseId(req.params.id);
+    if (!id) throw badRequest('유효하지 않은 신고 id 입니다.');
+
+    const content = typeof req.body.content === 'string' ? req.body.content.trim() : '';
+    if (!content) throw badRequest('조치 내용(content)은 필수입니다.');
+
+    // 조치 후 사진은 kind='action' 이라 원본 3장 제한과 무관합니다.
+    const photoUrls = parsePhotoUrls(req.body.photoUrls, 10);
+
+    const result = await sequelize.transaction(async (t) => {
+      const report = await Report.findByPk(id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!report) return null;
+
+      await ReportAction.create({
+        report_id: report.id,
+        content,
+        admin_id: req.user.id,
+      }, { transaction: t });
+
+      if (photoUrls.length > 0) {
+        // 같은 신고에 조치가 여러 번 등록될 수 있으므로
+        // sort_order 는 기존 조치 사진 개수부터 이어붙입니다.
+        const existing = await ReportPhoto.count({
+          where: { report_id: report.id, kind: 'action' },
+          transaction: t,
+        });
+
+        await ReportPhoto.bulkCreate(
+          photoUrls.map((url, index) => ({
+            report_id: report.id,
+            url,
+            kind: 'action',
+            sort_order: existing + index,
+          })),
+          { transaction: t },
+        );
+      }
+
+      const previousStatus = report.status;
+      report.status = 'done';
+      report.updated_at = new Date();
+      await report.save({ transaction: t });
+
+      await ReportStatusHistory.create({
+        report_id: report.id,
+        from_status: previousStatus,
+        to_status: 'done',
+        reason: '조치 완료',
+        changed_by: req.user.id,
+      }, { transaction: t });
+
+      return report;
+    });
+
+    if (!result) {
+      return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
+    }
 
     return res.status(200).json({ message: '조치 결과가 등록되고 완료 처리되었습니다.' });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: '조치 등록 중 오류가 발생했습니다.', error: error.message });
+    return next(error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 6. 재분류 · 수동 오버라이드 (A6) — 관리자 전용
+//    ai_* 컬럼은 건드리지 않습니다. AI 원본과 사람 수정본을 모두 보존합니다.
+// ---------------------------------------------------------------------------
+exports.overrideClassification = async (req, res, next) => {
+  try {
+    const id = parseId(req.params.id);
+    if (!id) throw badRequest('유효하지 않은 신고 id 입니다.');
+
+    const patch = { updated_at: new Date() };
+
+    if ('type' in req.body) {
+      patch.type = typeof req.body.type === 'string' && req.body.type.trim()
+        ? req.body.type.trim()
+        : null;
+    }
+
+    if ('urgency' in req.body) {
+      const urgency = parseEnumValue(req.body.urgency, URGENCY_LEVELS);
+      if (urgency === undefined) {
+        throw badRequest(`urgency는 ${URGENCY_LEVELS.join(', ')} 중 하나여야 합니다.`);
+      }
+      patch.urgency = urgency;
+    }
+
+    if (Object.keys(patch).length === 1) {
+      throw badRequest('type 또는 urgency 중 하나는 지정해야 합니다.');
+    }
+
+    const [affected] = await Report.update(patch, { where: { id } });
+    if (!affected) {
+      return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
+    }
+
+    const report = await Report.findByPk(id);
+    return res.status(200).json({ message: '분류가 수정되었습니다.', report });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 7. 유사 신고 묶음 · 병합 처리 (A7) — 관리자 전용
+// ---------------------------------------------------------------------------
+exports.mergeReports = async (req, res, next) => {
+  try {
+    const rawIds = Array.isArray(req.body.report_ids) ? req.body.report_ids : [];
+    const ids = [...new Set(rawIds.map(parseId).filter((v) => v !== null))];
+
+    if (ids.length < 2) {
+      throw badRequest('병합하려면 report_ids 에 유효한 신고 id 를 2건 이상 지정해야 합니다.');
+    }
+
+    const note = typeof req.body.note === 'string' && req.body.note.trim()
+      ? req.body.note.trim()
+      : null;
+
+    const result = await sequelize.transaction(async (t) => {
+      const found = await Report.count({ where: { id: ids }, transaction: t });
+      if (found !== ids.length) {
+        throw badRequest('존재하지 않는 신고 id 가 포함되어 있습니다.');
+      }
+
+      const group = await ReportGroup.create({
+        note,
+        created_by: req.user.id,
+      }, { transaction: t });
+
+      await Report.update(
+        { group_id: group.id, updated_at: new Date() },
+        { where: { id: ids }, transaction: t },
+      );
+
+      return group;
+    });
+
+    return res.status(200).json({
+      message: `${ids.length}건이 병합되었습니다.`,
+      groupId: result.id,
+      reportIds: ids,
+    });
+  } catch (error) {
+    return next(error);
   }
 };

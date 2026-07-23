@@ -6,62 +6,50 @@ const Floor = require('./Floor');
 const Zone = require('./Zone');
 const ReportGroup = require('./ReportGroup');
 const Report = require('./Report');
-const ReportPhoto = require('./ReportImage');
-const AiAnalysis = require('./AiAnalysis');
-const ReportStatusHistory = require('./StatusLog');
-const Action = require('./Action');
-const Feedback = require('./Feedback');
-const Notification = require('./Notification');
+const ReportPhoto = require('./ReportPhoto');
+const ReportStatusHistory = require('./ReportStatusHistory');
+const ReportAction = require('./ReportAction');
 
-// Building - Floor - Zone
-Building.hasMany(Floor, { foreignKey: 'building_id' });
-Floor.belongsTo(Building, { foreignKey: 'building_id' });
-Floor.hasMany(Zone, { foreignKey: 'floor_id' });
-Zone.belongsTo(Floor, { foreignKey: 'floor_id' });
+// ※ 아래 foreignKey 이름은 각 모델이 직접 선언한 컬럼명과 반드시 같아야 합니다.
+//    다르면 Sequelize 가 같은 뜻의 컬럼을 하나 더 만들어버립니다.
+//    (예전 Feedback 모델이 reportId + report_id 를 동시에 갖게 됐던 원인)
 
-// User - Report (신고자)
-User.hasMany(Report, { foreignKey: 'reporter_id' });
+// 배치도 위치 계층: 건물 → 층 → 구역
+Building.hasMany(Floor, { foreignKey: 'building_id', as: 'floors' });
+Floor.belongsTo(Building, { foreignKey: 'building_id', as: 'building' });
+Floor.hasMany(Zone, { foreignKey: 'floor_id', as: 'zones' });
+Zone.belongsTo(Floor, { foreignKey: 'floor_id', as: 'floor' });
+
+// 신고자
+User.hasMany(Report, { foreignKey: 'reporter_id', as: 'reports' });
 Report.belongsTo(User, { foreignKey: 'reporter_id', as: 'reporter' });
 
-// Location / area relationships
-Building.hasMany(Report, { foreignKey: 'building_id' });
-Report.belongsTo(Building, { foreignKey: 'building_id' });
-Floor.hasMany(Report, { foreignKey: 'floor_id' });
-Report.belongsTo(Floor, { foreignKey: 'floor_id' });
-Zone.hasMany(Report, { foreignKey: 'zone_id' });
-Report.belongsTo(Zone, { foreignKey: 'zone_id' });
+// 신고 위치 (조회 속도를 위해 building/floor 도 함께 보관)
+Building.hasMany(Report, { foreignKey: 'building_id', as: 'reports' });
+Report.belongsTo(Building, { foreignKey: 'building_id', as: 'building' });
+Floor.hasMany(Report, { foreignKey: 'floor_id', as: 'reports' });
+Report.belongsTo(Floor, { foreignKey: 'floor_id', as: 'floor' });
+Zone.hasMany(Report, { foreignKey: 'zone_id', as: 'reports' });
+Report.belongsTo(Zone, { foreignKey: 'zone_id', as: 'zone' });
 
-// Report group
-ReportGroup.hasMany(Report, { foreignKey: 'group_id' });
+// 유사 신고 병합 그룹
+ReportGroup.hasMany(Report, { foreignKey: 'group_id', as: 'reports' });
 Report.belongsTo(ReportGroup, { foreignKey: 'group_id', as: 'group' });
+ReportGroup.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
 
-// Report - ReportPhoto (1:N)
+// 사진 (원본 kind='report' / 조치 후 kind='action')
 Report.hasMany(ReportPhoto, { foreignKey: 'report_id', as: 'photos' });
-ReportPhoto.belongsTo(Report, { foreignKey: 'report_id' });
+ReportPhoto.belongsTo(Report, { foreignKey: 'report_id', as: 'report' });
 
-// Report - AiAnalysis (1:1)
-Report.hasOne(AiAnalysis, { foreignKey: 'reportId', as: 'aiAnalysis' });
-AiAnalysis.belongsTo(Report, { foreignKey: 'reportId' });
-
-// Report - StatusHistory (1:N, 타임라인)
+// 상태 변경 이력 (처리 타임라인)
 Report.hasMany(ReportStatusHistory, { foreignKey: 'report_id', as: 'status_history' });
-ReportStatusHistory.belongsTo(Report, { foreignKey: 'report_id' });
+ReportStatusHistory.belongsTo(Report, { foreignKey: 'report_id', as: 'report' });
+ReportStatusHistory.belongsTo(User, { foreignKey: 'changed_by', as: 'changer' });
 
-// Report - Action (1:1, 조치결과)
-Report.hasOne(Action, { foreignKey: 'report_id', as: 'action' });
-Action.belongsTo(Report, { foreignKey: 'report_id' });
-
-// Report - Feedback (1:1)
-Report.hasOne(Feedback, { foreignKey: 'report_id', as: 'feedback' });
-Feedback.belongsTo(Report, { foreignKey: 'report_id' });
-
-// Report - Notification (1:N)
-Report.hasMany(Notification, { foreignKey: 'report_id' });
-Notification.belongsTo(Report, { foreignKey: 'report_id' });
-
-// User - Notification (1:N)
-User.hasMany(Notification, { foreignKey: 'user_id' });
-Notification.belongsTo(User, { foreignKey: 'user_id' });
+// 조치 결과 (report_actions 에 UNIQUE 가 없으므로 1:N)
+Report.hasMany(ReportAction, { foreignKey: 'report_id', as: 'actions' });
+ReportAction.belongsTo(Report, { foreignKey: 'report_id', as: 'report' });
+ReportAction.belongsTo(User, { foreignKey: 'admin_id', as: 'admin' });
 
 module.exports = {
   sequelize,
@@ -72,9 +60,6 @@ module.exports = {
   ReportGroup,
   Report,
   ReportPhoto,
-  AiAnalysis,
   ReportStatusHistory,
-  Action,
-  Feedback,
-  Notification,
+  ReportAction,
 };

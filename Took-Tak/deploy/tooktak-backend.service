@@ -1,0 +1,56 @@
+# 뚝딱 백엔드 systemd 유닛 (백엔드 EC2 · private subnet)
+#
+# 설치:
+#   sudo cp deploy/tooktak-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tooktak-backend
+#
+# 로그:  journalctl -u tooktak-backend -f
+#
+# ※ .env 를 앱 디렉터리에 두지 않고 /etc/tooktak/backend.env 로 뺐습니다.
+#   앱 디렉터리는 git pull 로 덮어써지는 곳이라 배포할 때마다 비밀값이 날아갑니다.
+#   dotenv 는 그대로 두어도 됩니다. 파일이 없으면 조용히 넘어가고,
+#   systemd 가 넣어준 환경변수를 process.env 에서 그대로 읽습니다.
+
+[Unit]
+Description=Took-Tak backend (Express + PostgreSQL + Bedrock)
+Documentation=file:///opt/tooktak/backend/docs/AWS_DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tooktak
+Group=tooktak
+WorkingDirectory=/opt/tooktak/backend
+
+# 비밀값은 여기서만 읽습니다. 600 권한 + tooktak 소유로 두세요.
+EnvironmentFile=/etc/tooktak/backend.env
+Environment=NODE_ENV=production
+
+ExecStart=/usr/bin/node server.js
+
+Restart=always
+RestartSec=3
+# 기동 직후 계속 죽는 상황(예: DB 접속 실패로 process.exit(1))에서
+# 무한 재시작으로 CPU 를 태우지 않도록 제한합니다.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tooktak-backend
+
+# --- 최소 권한 ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# 로컬 업로드 디렉터리는 써야 하므로 예외로 엽니다. (S3 전환 후 삭제 가능)
+ReadWritePaths=/opt/tooktak/backend/src/uploads
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

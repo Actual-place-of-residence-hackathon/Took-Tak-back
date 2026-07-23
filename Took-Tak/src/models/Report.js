@@ -52,6 +52,11 @@ const Report = sequelize.define('Report', {
     type: DataTypes.ENUM('high', 'medium', 'low'),
     allowNull: true,
   },
+  ai_summary: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    comment: 'AI 신고 내용 요약 (기능명세 8.1)',
+  },
   ai_reasoning: {
     type: DataTypes.TEXT,
     allowNull: true,

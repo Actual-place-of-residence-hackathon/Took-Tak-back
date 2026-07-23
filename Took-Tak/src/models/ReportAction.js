@@ -1,7 +1,7 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
 
-const Action = sequelize.define('Action', {
+const ReportAction = sequelize.define('ReportAction', {
   id: {
     type: DataTypes.BIGINT,
     primaryKey: true,
@@ -29,4 +29,4 @@ const Action = sequelize.define('Action', {
   timestamps: false,
 });
 
-module.exports = Action;
+module.exports = ReportAction;
