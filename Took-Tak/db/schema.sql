@@ -69,10 +69,19 @@ CREATE TABLE floors (
     UNIQUE (id, building_id)               -- 복합 FK 대상
 );
 
+-- ⚠ 팀 결정(2026-07-24): 학생이 배치도 위 임의 좌표를 찍는 방식(pinX/pinY 연속값)
+--   대신, 관리자가 미리 지정해둔 zone 의 고정 좌표 중 하나를 선택하는 방식으로
+--   통일했습니다. 프론트 PinMap 은 자유 클릭이 아니라 zone hotspot 선택 UI 로 동작합니다.
+--   이 결정 덕분에 히트맵(A10)·핀(C1/A3)이 좌표 클러스터링 없이 zone_id 로 집계됩니다.
 CREATE TABLE zones (
     id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     floor_id BIGINT NOT NULL REFERENCES floors(id) ON DELETE CASCADE,
     name     TEXT   NOT NULL,              -- 구획(배치도 핀·히트맵의 최소 단위)
+    -- 배치도 이미지(public/floor-plans/*.png) 위 핀 위치. 0~100 사이 퍼센트값.
+    -- NULL 이면 프론트가 해당 zone 의 핀을 표시하지 못하므로, 관리자가 등록 시
+    -- 반드시 채워야 합니다.
+    pin_x    NUMERIC(5,2) CHECK (pin_x IS NULL OR (pin_x >= 0 AND pin_x <= 100)),
+    pin_y    NUMERIC(5,2) CHECK (pin_y IS NULL OR (pin_y >= 0 AND pin_y <= 100)),
     UNIQUE (floor_id, name),
     UNIQUE (id, floor_id)                  -- 복합 FK 대상
 );
