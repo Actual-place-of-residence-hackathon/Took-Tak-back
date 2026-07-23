@@ -2,68 +2,78 @@ const sequelize = require('../config/db');
 
 const User = require('./User');
 const Building = require('./Building');
-const Location = require('./Location');
+const Floor = require('./Floor');
+const Zone = require('./Zone');
+const ReportGroup = require('./ReportGroup');
 const Report = require('./Report');
-const ReportImage = require('./ReportImage');
+const ReportPhoto = require('./ReportImage');
 const AiAnalysis = require('./AiAnalysis');
-const StatusLog = require('./StatusLog');
+const ReportStatusHistory = require('./StatusLog');
 const Action = require('./Action');
 const Feedback = require('./Feedback');
 const Notification = require('./Notification');
 
-// Building - Location
-Building.hasMany(Location, { foreignKey: 'buildingId' });
-Location.belongsTo(Building, { foreignKey: 'buildingId' });
+// Building - Floor - Zone
+Building.hasMany(Floor, { foreignKey: 'building_id' });
+Floor.belongsTo(Building, { foreignKey: 'building_id' });
+Floor.hasMany(Zone, { foreignKey: 'floor_id' });
+Zone.belongsTo(Floor, { foreignKey: 'floor_id' });
 
 // User - Report (신고자)
-User.hasMany(Report, { foreignKey: 'reporterId' });
-Report.belongsTo(User, { foreignKey: 'reporterId', as: 'reporter' });
+User.hasMany(Report, { foreignKey: 'reporter_id' });
+Report.belongsTo(User, { foreignKey: 'reporter_id', as: 'reporter' });
 
-// Location - Report
-Location.hasMany(Report, { foreignKey: 'locationId' });
-Report.belongsTo(Location, { foreignKey: 'locationId' });
+// Location / area relationships
+Building.hasMany(Report, { foreignKey: 'building_id' });
+Report.belongsTo(Building, { foreignKey: 'building_id' });
+Floor.hasMany(Report, { foreignKey: 'floor_id' });
+Report.belongsTo(Floor, { foreignKey: 'floor_id' });
+Zone.hasMany(Report, { foreignKey: 'zone_id' });
+Report.belongsTo(Zone, { foreignKey: 'zone_id' });
 
-// Report - ReportImage (1:N)
-Report.hasMany(ReportImage, { foreignKey: 'reportId', as: 'images' });
-ReportImage.belongsTo(Report, { foreignKey: 'reportId' });
+// Report group
+ReportGroup.hasMany(Report, { foreignKey: 'group_id' });
+Report.belongsTo(ReportGroup, { foreignKey: 'group_id', as: 'group' });
+
+// Report - ReportPhoto (1:N)
+Report.hasMany(ReportPhoto, { foreignKey: 'report_id', as: 'photos' });
+ReportPhoto.belongsTo(Report, { foreignKey: 'report_id' });
 
 // Report - AiAnalysis (1:1)
 Report.hasOne(AiAnalysis, { foreignKey: 'reportId', as: 'aiAnalysis' });
 AiAnalysis.belongsTo(Report, { foreignKey: 'reportId' });
 
-// Report - StatusLog (1:N, 타임라인)
-Report.hasMany(StatusLog, { foreignKey: 'reportId', as: 'statusLogs' });
-StatusLog.belongsTo(Report, { foreignKey: 'reportId' });
+// Report - StatusHistory (1:N, 타임라인)
+Report.hasMany(ReportStatusHistory, { foreignKey: 'report_id', as: 'status_history' });
+ReportStatusHistory.belongsTo(Report, { foreignKey: 'report_id' });
 
 // Report - Action (1:1, 조치결과)
-Report.hasOne(Action, { foreignKey: 'reportId', as: 'action' });
-Action.belongsTo(Report, { foreignKey: 'reportId' });
+Report.hasOne(Action, { foreignKey: 'report_id', as: 'action' });
+Action.belongsTo(Report, { foreignKey: 'report_id' });
 
 // Report - Feedback (1:1)
-Report.hasOne(Feedback, { foreignKey: 'reportId', as: 'feedback' });
-Feedback.belongsTo(Report, { foreignKey: 'reportId' });
+Report.hasOne(Feedback, { foreignKey: 'report_id', as: 'feedback' });
+Feedback.belongsTo(Report, { foreignKey: 'report_id' });
 
 // Report - Notification (1:N)
-Report.hasMany(Notification, { foreignKey: 'reportId' });
-Notification.belongsTo(Report, { foreignKey: 'reportId' });
+Report.hasMany(Notification, { foreignKey: 'report_id' });
+Notification.belongsTo(Report, { foreignKey: 'report_id' });
 
 // User - Notification (1:N)
-User.hasMany(Notification, { foreignKey: 'userId' });
-Notification.belongsTo(User, { foreignKey: 'userId' });
-
-// Report - Report (유사 신고 병합, self-reference)
-Report.belongsTo(Report, { foreignKey: 'mergedIntoId', as: 'mergedInto' });
-Report.hasMany(Report, { foreignKey: 'mergedIntoId', as: 'mergedChildren' });
+User.hasMany(Notification, { foreignKey: 'user_id' });
+Notification.belongsTo(User, { foreignKey: 'user_id' });
 
 module.exports = {
   sequelize,
   User,
   Building,
-  Location,
+  Floor,
+  Zone,
+  ReportGroup,
   Report,
-  ReportImage,
+  ReportPhoto,
   AiAnalysis,
-  StatusLog,
+  ReportStatusHistory,
   Action,
   Feedback,
   Notification,

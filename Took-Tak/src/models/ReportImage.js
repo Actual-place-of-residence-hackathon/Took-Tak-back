@@ -1,26 +1,38 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
 
-const ReportImage = sequelize.define('ReportImage', {
+const ReportPhoto = sequelize.define('ReportPhoto', {
   id: {
     type: DataTypes.BIGINT,
     primaryKey: true,
     autoIncrement: true,
   },
-  reportId: {
+  report_id: {
     type: DataTypes.BIGINT,
     allowNull: false,
   },
-  imageUrl: {
-    type: DataTypes.STRING,
+  url: {
+    type: DataTypes.TEXT,
     allowNull: false,
   },
-  imageType: {
-    type: DataTypes.ENUM('원본', '조치후'),
-    defaultValue: '원본',
+  kind: {
+    type: DataTypes.ENUM('report', 'action'),
+    allowNull: false,
+    defaultValue: 'report',
+  },
+  sort_order: {
+    type: DataTypes.SMALLINT,
+    allowNull: false,
+    defaultValue: 0,
+  },
+  created_at: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW,
   },
 }, {
-  tableName: 'report_images',
+  tableName: 'report_photos',
+  timestamps: false,
 });
 
-module.exports = ReportImage;
+module.exports = ReportPhoto;

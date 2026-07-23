@@ -7,20 +7,26 @@ const Action = sequelize.define('Action', {
     primaryKey: true,
     autoIncrement: true,
   },
-  reportId: {
+  report_id: {
     type: DataTypes.BIGINT,
     allowNull: false,
   },
-  adminId: {
-    type: DataTypes.BIGINT,
-    allowNull: false,
-  },
-  actionContent: {
+  content: {
     type: DataTypes.TEXT,
     allowNull: false,
   },
+  admin_id: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+  },
+  created_at: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW,
+  },
 }, {
-  tableName: 'actions',
+  tableName: 'report_actions',
+  timestamps: false,
 });
 
 module.exports = Action;

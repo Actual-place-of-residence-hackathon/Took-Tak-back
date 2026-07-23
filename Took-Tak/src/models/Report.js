@@ -7,45 +7,76 @@ const Report = sequelize.define('Report', {
     primaryKey: true,
     autoIncrement: true,
   },
-  reporterId: {
+  reporter_id: {
     type: DataTypes.BIGINT,
-    allowNull: true, // 익명 신고면 NULL
+    allowNull: false,
   },
-  anonymousCode: {
-    type: DataTypes.STRING,
+  building_id: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+  },
+  floor_id: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+  },
+  zone_id: {
+    type: DataTypes.BIGINT,
+    allowNull: false,
+  },
+  part: {
+    type: DataTypes.TEXT,
     allowNull: true,
-  },
-  isAnonymous: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-  },
-  locationId: {
-    type: DataTypes.BIGINT,
-    allowNull: false,
-  },
-  category: {
-    type: DataTypes.ENUM('전기', '누수', '파손', '청소', '기타'),
-    allowNull: false,
-  },
-  urgency: {
-    type: DataTypes.ENUM('상', '중', '하'),
-    allowNull: false,
   },
   description: {
     type: DataTypes.STRING(500),
-    allowNull: false,
+    allowNull: true,
   },
   status: {
-    type: DataTypes.ENUM('접수', '확인중', '처리중', '완료', '보류'),
-    defaultValue: '접수',
+    type: DataTypes.ENUM('received', 'checking', 'processing', 'done', 'hold'),
+    allowNull: false,
+    defaultValue: 'received',
   },
-  mergedIntoId: {
+  type: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  urgency: {
+    type: DataTypes.ENUM('high', 'medium', 'low'),
+    allowNull: true,
+  },
+  ai_type: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  ai_urgency: {
+    type: DataTypes.ENUM('high', 'medium', 'low'),
+    allowNull: true,
+  },
+  ai_reasoning: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  ai_suggested_action: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  group_id: {
     type: DataTypes.BIGINT,
     allowNull: true,
-    comment: '유사 신고로 병합된 경우 대표 신고 ID',
+  },
+  created_at: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW,
+  },
+  updated_at: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW,
   },
 }, {
   tableName: 'reports',
+  timestamps: false,
 });
 
 module.exports = Report;

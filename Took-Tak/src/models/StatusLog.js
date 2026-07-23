@@ -1,35 +1,40 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/db');
 
-const StatusLog = sequelize.define('StatusLog', {
+const ReportStatusHistory = sequelize.define('ReportStatusHistory', {
   id: {
     type: DataTypes.BIGINT,
     primaryKey: true,
     autoIncrement: true,
   },
-  reportId: {
+  report_id: {
     type: DataTypes.BIGINT,
     allowNull: false,
   },
-  prevStatus: {
-    type: DataTypes.STRING,
+  from_status: {
+    type: DataTypes.ENUM('received', 'checking', 'processing', 'done', 'hold'),
     allowNull: true,
   },
-  newStatus: {
-    type: DataTypes.STRING,
+  to_status: {
+    type: DataTypes.ENUM('received', 'checking', 'processing', 'done', 'hold'),
     allowNull: false,
-  },
-  changedBy: {
-    type: DataTypes.BIGINT,
-    allowNull: true,
-    comment: '변경한 관리자 user id',
   },
   reason: {
     type: DataTypes.TEXT,
     allowNull: true,
   },
+  changed_by: {
+    type: DataTypes.BIGINT,
+    allowNull: true,
+  },
+  changed_at: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW,
+  },
 }, {
-  tableName: 'status_logs',
+  tableName: 'report_status_history',
+  timestamps: false,
 });
 
-module.exports = StatusLog;
+module.exports = ReportStatusHistory;
