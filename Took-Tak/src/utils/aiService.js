@@ -8,8 +8,27 @@
 //
 // 반환 키는 reports 테이블 컬럼명과 1:1로 맞춰져 있습니다. (docs/BEDROCK_HANDOFF.md 4절)
 
+const fs = require('fs/promises');
+const path = require('path');
 const { AnthropicBedrockMantle } = require('@anthropic-ai/bedrock-sdk');
 const env = require('../config/env');
+
+// 업로드된 원본 사진이 저장되는 로컬 디렉터리.
+// report_photos.url 에는 이 디렉터리 기준 파일명(또는 경로)이 들어갑니다.
+// (docs/BEDROCK_HANDOFF.md 8절)
+const UPLOAD_DIR = path.join(__dirname, '../uploads');
+
+// AI 분석에 넘길 이미지는 최대 3장 (원본 사진 제한과 동일).
+const MAX_IMAGES = 3;
+
+// Bedrock(Anthropic)이 지원하는 이미지 media type. 그 외 확장자는 건너뜁니다.
+const MEDIA_TYPE_BY_EXT = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
 
 // urgency_level ENUM 과 동일한 값만 반환해야 합니다. (한글 '상/중/하' 아님)
 const URGENCY_VALUES = ['high', 'medium', 'low'];
@@ -34,7 +53,9 @@ const client = new AnthropicBedrockMantle({
 
 const SYSTEM_PROMPT = `
 당신은 학교 시설 고장·불편 신고를 분류하는 도우미입니다.
-신고 내용을 읽고 반드시 submit_classification 도구를 호출해 결과를 제출하세요.
+첨부된 사진이 있으면 사진과 신고 내용을 함께 확인해 판단하세요.
+사진과 글의 내용이 서로 다르면 더 확실한 쪽을 기준으로 판단하고, 그 사실을 reasoning 에 적으세요.
+반드시 submit_classification 도구를 호출해 결과를 제출하세요.
 도구를 호출하지 않고 일반 텍스트로만 답하면 안 됩니다.
 
 긴급도 기준:
@@ -98,11 +119,50 @@ function normalizeText(value) {
 }
 
 /**
+ * photoUrls(파일명/경로 문자열 배열)를 읽어 base64 이미지 블록으로 변환합니다.
+ *
+ * Bedrock 은 Files API·이미지 URL 을 못 쓰고 base64 인라인만 됩니다. (8절)
+ * 이미지 로딩 실패는 분류 전체를 막지 않습니다. 읽은 것만 넘기고 나머지는 건너뜁니다.
+ * (사진이 없거나 다 실패해도 텍스트만으로 분류가 진행됩니다.)
+ *
+ * @param {string[]} photoUrls
+ * @returns {Promise<Array<{ base64: string, mediaType: string }>>}
+ */
+async function loadImages(photoUrls = []) {
+  if (!Array.isArray(photoUrls) || photoUrls.length === 0) return [];
+
+  const images = [];
+  for (const raw of photoUrls.slice(0, MAX_IMAGES)) {
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+
+    // report_photos.url 에 상대 경로나 URL 이 들어와도 파일명만 취해
+    // UPLOAD_DIR 밖으로 벗어나지 못하게 합니다(경로 순회 방지).
+    const filename = path.basename(raw.trim());
+    const ext = path.extname(filename).toLowerCase();
+    const mediaType = MEDIA_TYPE_BY_EXT[ext];
+
+    if (!mediaType) {
+      console.warn('[ai] 지원하지 않는 이미지 형식이라 건너뜁니다:', filename);
+      continue;
+    }
+
+    try {
+      const bytes = await fs.readFile(path.join(UPLOAD_DIR, filename));
+      images.push({ base64: bytes.toString('base64'), mediaType });
+    } catch (err) {
+      // 파일이 없거나 읽기 실패 — 해당 이미지만 건너뛰고 계속 진행합니다.
+      console.warn('[ai] 이미지 로딩 실패, 건너뜁니다:', filename, '-', err.message);
+    }
+  }
+  return images;
+}
+
+/**
  * 신고 1건을 분류합니다.
  *
  * @param {object}   input
  * @param {string}   input.description  신고 상세 설명
- * @param {string[]} input.photoUrls    첨부 사진. 아직 모델에 넘기지 않습니다(아래 주석).
+ * @param {string[]} input.photoUrls    첨부 사진 파일명/경로. 로컬에서 읽어 모델에 함께 전달합니다.
  * @returns {Promise<{type: string|null, urgency: 'high'|'medium'|'low'|null,
  *                    summary: string|null, reasoning: string|null,
  *                    suggested_action: string|null}>}
@@ -115,15 +175,26 @@ async function analyzeReport({ description = '', photoUrls = [] }) {
     throw new Error('BEDROCK_MODEL_ID 가 설정되지 않았습니다. AI 분류를 건너뜁니다.');
   }
 
-  // photoUrls 는 아직 쓰지 않습니다. 호출부 계약을 바꾸지 않으려고 받아만 둡니다.
-  // Bedrock 은 Files API 를 못 쓰고 이미지 URL 도 직접 못 받습니다. base64 인라인만 됩니다.
-  // 지금 report_photos 에 들어 있는 값은 클라이언트가 보낸 문자열이라 서버가 실제
-  // 바이트를 가져올 경로가 없습니다. S3 전환 후 아래 content 배열 앞에 image 블록을
-  // 추가하면 됩니다. (docs/S3_DESIGN.md, docs/BEDROCK_HANDOFF.md 8절)
-  const content = [{
+  // 첨부 사진을 로컬에서 읽어 base64 이미지 블록으로 만듭니다. (8절)
+  // 이미지 블록을 텍스트 앞쪽에 두어 모델이 사진을 먼저 보고 내용을 읽게 합니다.
+  const images = await loadImages(photoUrls);
+  const content = [];
+  for (const img of images) {
+    content.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: img.mediaType,
+        data: img.base64,
+      },
+    });
+  }
+  content.push({
     type: 'text',
-    text: `신고 내용: ${description || '(내용 없음)'}`,
-  }];
+    text: images.length > 0
+      ? `첨부된 사진 ${images.length}장과 아래 신고 내용을 함께 확인해 분류하세요.\n신고 내용: ${description || '(내용 없음)'}`
+      : `신고 내용: ${description || '(내용 없음)'}`,
+  });
 
   let response;
   try {
