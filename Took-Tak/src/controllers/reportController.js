@@ -48,6 +48,22 @@ function parseCoordinate(value) {
   return Number.isFinite(num) && num >= 0 && num <= 100 ? num : null;
 }
 
+async function getReportCoordinateSupport() {
+  const rows = await sequelize.query(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'reports'
+        AND column_name IN ('pin_x', 'pin_y')`,
+    { type: QueryTypes.SELECT },
+  );
+
+  const columns = new Set(rows.map((row) => row.column_name));
+  return {
+    supportsPinCoordinates: columns.has('pin_x') && columns.has('pin_y'),
+  };
+}
+
 function toUploadUrl(req, filename) {
   const configuredBaseUrl = (env.publicBaseUrl || '').replace(/\/$/, '');
   const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
@@ -97,6 +113,7 @@ exports.createReport = async (req, res, next) => {
       return res.status(400).json({ message: 'reporter_id는 필수입니다.' });
     }
 
+    const reportCoordinateSupport = await getReportCoordinateSupport();
     const buildingId = parseId(req.body.building_id);
     const floorId = parseId(req.body.floor_id);
     const zoneId = parseId(req.body.zone_id);
@@ -108,7 +125,7 @@ exports.createReport = async (req, res, next) => {
     }
 
     const hasZoneSelection = zoneId !== null;
-    const hasFreeClick = pinX !== null && pinY !== null;
+    const hasFreeClick = reportCoordinateSupport.supportsPinCoordinates && pinX !== null && pinY !== null;
 
     if (!hasZoneSelection && !hasFreeClick) {
       return res.status(400).json({ message: 'zone_id 또는 pin_x/pin_y 중 하나는 필수입니다.' });
@@ -160,13 +177,11 @@ exports.createReport = async (req, res, next) => {
     // 사진/이력까지 한 트랜잭션으로 묶습니다.
     // 중간에 실패하면 "이력 없는 신고"가 남아 처리 타임라인이 깨집니다.
     const reportId = await sequelize.transaction(async (t) => {
-      const report = await Report.create({
+      const reportPayload = {
         reporter_id: reporterId,
         building_id: buildingId,
         floor_id: floorId,
         zone_id: zoneId,
-        pin_x: pinX,
-        pin_y: pinY,
         part,
         description: description.value,
         status: 'received',
@@ -178,7 +193,14 @@ exports.createReport = async (req, res, next) => {
         ai_summary: ai ? ai.summary : null,
         ai_reasoning: ai ? ai.reasoning : null,
         ai_suggested_action: ai ? ai.suggested_action : null,
-      }, { transaction: t });
+      };
+
+      if (reportCoordinateSupport.supportsPinCoordinates) {
+        reportPayload.pin_x = pinX;
+        reportPayload.pin_y = pinY;
+      }
+
+      const report = await Report.create(reportPayload, { transaction: t });
 
       if (photoUrls.length > 0) {
         await ReportPhoto.bulkCreate(
@@ -215,6 +237,7 @@ exports.createReport = async (req, res, next) => {
 exports.getReports = async (req, res, next) => {
   try {
     const isStudent = req.user?.role === 'student';
+    const reportCoordinateSupport = await getReportCoordinateSupport();
 
     const status = parseEnumValue(req.query.status, REPORT_STATUSES);
     if (status === undefined) {
@@ -245,14 +268,19 @@ exports.getReports = async (req, res, next) => {
     const limit = Math.min(parseId(req.query.limit) || 50, 200);
     const offset = parseId(req.query.offset) || 0;
 
+    const pinCoordinateSelect = reportCoordinateSupport.supportsPinCoordinates
+      ? `COALESCE(r.pin_x, z.pin_x) AS pin_x,
+         COALESCE(r.pin_y, z.pin_y) AS pin_y,`
+      : `NULL::numeric AS pin_x,
+         NULL::numeric AS pin_y,`;
+
     const rows = await sequelize.query(
       `SELECT r.id, r.type, r.urgency, r.status, r.part, r.description,
               r.created_at, r.updated_at, r.group_id,
               b.id AS building_id, b.name AS building,
               f.id AS floor_id,    f.name AS floor,
               z.id AS zone_id,     z.name AS zone,
-              COALESCE(r.pin_x, z.pin_x) AS pin_x,
-              COALESCE(r.pin_y, z.pin_y) AS pin_y,
+              ${pinCoordinateSelect}
               u.id AS reporter_id, u.name AS reporter_name,
               (SELECT p.url FROM report_photos p
                 WHERE p.report_id = r.id AND p.kind = 'report'
@@ -305,27 +333,94 @@ exports.getReportById = async (req, res, next) => {
     const id = parseId(req.params.id);
     if (!id) throw badRequest('유효하지 않은 신고 id 입니다.');
 
-    const report = await Report.findByPk(id, {
-      include: [
-        { model: Building, as: 'building', attributes: ['id', 'name'] },
-        { model: Floor, as: 'floor', attributes: ['id', 'name'] },
-        { model: Zone, as: 'zone', attributes: ['id', 'name', 'pin_x', 'pin_y'] },
-        { model: User, as: 'reporter', attributes: ['id', 'name'] },
-        {
-          model: ReportPhoto,
-          as: 'photos',
-          attributes: ['id', 'url', 'kind', 'sort_order'],
-        },
-        {
-          // ※ 연관을 as 로 정의했으면 include 에도 반드시 as 를 써야 합니다.
-          //   빠지면 Sequelize 가 EagerLoadingError 를 던져 500 이 납니다.
-          model: ReportAction,
-          as: 'actions',
-          attributes: ['id', 'content', 'admin_id', 'created_at'],
-        },
-      ],
-      order: [[{ model: ReportPhoto, as: 'photos' }, 'sort_order', 'ASC']],
-    });
+    const reportCoordinateSupport = await getReportCoordinateSupport();
+
+    let report;
+    if (reportCoordinateSupport.supportsPinCoordinates) {
+      report = await Report.findByPk(id, {
+        include: [
+          { model: Building, as: 'building', attributes: ['id', 'name'] },
+          { model: Floor, as: 'floor', attributes: ['id', 'name'] },
+          { model: Zone, as: 'zone', attributes: ['id', 'name', 'pin_x', 'pin_y'] },
+          { model: User, as: 'reporter', attributes: ['id', 'name'] },
+          {
+            model: ReportPhoto,
+            as: 'photos',
+            attributes: ['id', 'url', 'kind', 'sort_order'],
+          },
+          {
+            model: ReportAction,
+            as: 'actions',
+            attributes: ['id', 'content', 'admin_id', 'created_at'],
+          },
+        ],
+        order: [[{ model: ReportPhoto, as: 'photos' }, 'sort_order', 'ASC']],
+      });
+    } else {
+      const [reportRow] = await sequelize.query(
+        `SELECT r.id, r.reporter_id, r.building_id, r.floor_id, r.zone_id,
+                r.part, r.description, r.status, r.type, r.urgency,
+                r.ai_type, r.ai_urgency, r.ai_summary, r.ai_reasoning,
+                r.ai_suggested_action, r.group_id, r.created_at, r.updated_at,
+                b.id AS building_id_value, b.name AS building_name,
+                f.id AS floor_id_value, f.name AS floor_name,
+                z.id AS zone_id_value, z.name AS zone_name,
+                u.id AS reporter_id_value, u.name AS reporter_name
+           FROM reports r
+           JOIN buildings b ON b.id = r.building_id
+           JOIN floors f ON f.id = r.floor_id
+           LEFT JOIN zones z ON z.id = r.zone_id
+           JOIN users u ON u.id = r.reporter_id
+          WHERE r.id = $1`,
+        { bind: [id], type: QueryTypes.SELECT },
+      );
+
+      if (!reportRow) {
+        return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
+      }
+
+      const [photos, actions, statusHistory] = await Promise.all([
+        sequelize.query(
+          `SELECT id, url, kind, sort_order
+             FROM report_photos
+            WHERE report_id = $1
+            ORDER BY sort_order ASC`,
+          { bind: [id], type: QueryTypes.SELECT },
+        ),
+        sequelize.query(
+          `SELECT id, content, admin_id, created_at
+             FROM report_actions
+            WHERE report_id = $1
+            ORDER BY created_at ASC`,
+          { bind: [id], type: QueryTypes.SELECT },
+        ),
+        sequelize.query(
+          `SELECT id, from_status, to_status, reason, changed_by, changed_at
+             FROM report_status_history
+            WHERE report_id = $1
+            ORDER BY changed_at ASC`,
+          { bind: [id], type: QueryTypes.SELECT },
+        ),
+      ]);
+
+      report = {
+        ...reportRow,
+        building: { id: reportRow.building_id_value, name: reportRow.building_name },
+        floor: { id: reportRow.floor_id_value, name: reportRow.floor_name },
+        zone: reportRow.zone_id_value
+          ? { id: reportRow.zone_id_value, name: reportRow.zone_name }
+          : null,
+        reporter: { id: reportRow.reporter_id_value, name: reportRow.reporter_name },
+        photos,
+        actions,
+      };
+
+      if (req.user?.role === 'student' && !sameId(report.reporter_id, req.user.id)) {
+        return res.status(403).json({ message: '권한이 없습니다.' });
+      }
+
+      return res.status(200).json({ report, status_history: statusHistory });
+    }
 
     if (!report) {
       return res.status(404).json({ message: '신고를 찾을 수 없습니다.' });
