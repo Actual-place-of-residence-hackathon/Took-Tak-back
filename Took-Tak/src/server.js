@@ -13,6 +13,7 @@ const locationRoutes = require('./routes/locationRoutes');
 
 const app = express();
 
+app.set('trust proxy', true);
 app.use(cors({ origin: env.corsOrigin }));
 app.use(express.json({ limit: '1mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
