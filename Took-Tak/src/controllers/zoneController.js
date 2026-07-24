@@ -65,7 +65,7 @@ exports.getZoneReports = async (req, res, next) => {
       throw badRequest(`status는 ${REPORT_STATUSES.join(', ')} 중 하나여야 합니다.`);
     }
 
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = req.user?.role === 'admin';
     const descriptionColumn = isAdmin ? 'r.description' : 'NULL::text';
 
     const rows = await sequelize.query(

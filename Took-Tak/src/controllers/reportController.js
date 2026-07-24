@@ -92,7 +92,10 @@ exports.uploadActionImage = async (req, res, next) => {
 // ---------------------------------------------------------------------------
 exports.createReport = async (req, res, next) => {
   try {
-    const reporterId = req.user.id;
+    const reporterId = parseId(req.body.reporter_id) || req.user?.id;
+    if (!reporterId) {
+      return res.status(400).json({ message: 'reporter_id는 필수입니다.' });
+    }
 
     const buildingId = parseId(req.body.building_id);
     const floorId = parseId(req.body.floor_id);
@@ -211,7 +214,7 @@ exports.createReport = async (req, res, next) => {
 // ---------------------------------------------------------------------------
 exports.getReports = async (req, res, next) => {
   try {
-    const isStudent = req.user.role === 'student';
+    const isStudent = req.user?.role === 'student';
 
     const status = parseEnumValue(req.query.status, REPORT_STATUSES);
     if (status === undefined) {
@@ -329,7 +332,7 @@ exports.getReportById = async (req, res, next) => {
     }
 
     // 학생은 본인 신고만 볼 수 있습니다. (기능명세 13: 권한 분리)
-    if (req.user.role === 'student' && !sameId(report.reporter_id, req.user.id)) {
+    if (req.user?.role === 'student' && !sameId(report.reporter_id, req.user.id)) {
       return res.status(403).json({ message: '권한이 없습니다.' });
     }
 

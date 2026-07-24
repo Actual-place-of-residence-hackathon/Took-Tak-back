@@ -2,10 +2,10 @@ const express = require('express');
 
 const router = express.Router();
 const reportController = require('../controllers/reportController');
-const { requireAuth, requireAdmin } = require('../middleware/auth.middleware');
+const { optionalAuth, requireAuth, requireAdmin } = require('../middleware/auth.middleware');
 const { uploadReportImages, uploadActionImage } = require('../middleware/upload.middleware');
 
-router.use(requireAuth);
+router.use(optionalAuth);
 
 // 업로드된 이미지 파일을 백엔드가 저장하고 접근 가능한 URL 을 돌려줍니다.
 router.post('/upload-images', uploadReportImages, reportController.uploadReportImages);
