@@ -247,7 +247,9 @@ exports.getReports = async (req, res, next) => {
               r.created_at, r.updated_at, r.group_id,
               b.id AS building_id, b.name AS building,
               f.id AS floor_id,    f.name AS floor,
-              z.id AS zone_id,     z.name AS zone, z.pin_x, z.pin_y,
+              z.id AS zone_id,     z.name AS zone,
+              COALESCE(r.pin_x, z.pin_x) AS pin_x,
+              COALESCE(r.pin_y, z.pin_y) AS pin_y,
               u.id AS reporter_id, u.name AS reporter_name,
               (SELECT p.url FROM report_photos p
                 WHERE p.report_id = r.id AND p.kind = 'report'
@@ -255,7 +257,7 @@ exports.getReports = async (req, res, next) => {
          FROM reports r
          JOIN buildings b ON b.id = r.building_id
          JOIN floors    f ON f.id = r.floor_id
-         JOIN zones     z ON z.id = r.zone_id
+         LEFT JOIN zones z ON z.id = r.zone_id
          JOIN users     u ON u.id = r.reporter_id
         WHERE ($1::bigint        IS NULL OR r.reporter_id = $1)
           AND ($2::text          IS NULL OR r.type = $2)

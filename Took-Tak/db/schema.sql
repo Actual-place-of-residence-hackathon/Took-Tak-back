@@ -116,7 +116,9 @@ CREATE TABLE reports (
 
     building_id  BIGINT NOT NULL,
     floor_id     BIGINT NOT NULL,
-    zone_id      BIGINT NOT NULL,
+    zone_id      BIGINT,                                -- 자유 클릭 좌표 모드에서는 NULL 허용
+    pin_x        NUMERIC(5,2) CHECK (pin_x IS NULL OR (pin_x >= 0 AND pin_x <= 100)),
+    pin_y        NUMERIC(5,2) CHECK (pin_y IS NULL OR (pin_y >= 0 AND pin_y <= 100)),
     part         TEXT,                                  -- 부위(자유 입력)
     description  VARCHAR(500),                          -- 상세 설명(최대 500자)
 
