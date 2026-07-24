@@ -8,6 +8,20 @@ function badRequest(message) {
   return err;
 }
 
+async function getReportPinCoordinateSupport() {
+  const rows = await sequelize.query(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'reports'
+        AND column_name IN ('pin_x', 'pin_y')`,
+    { type: QueryTypes.SELECT },
+  );
+
+  const columns = new Set(rows.map((row) => row.column_name));
+  return columns.has('pin_x') && columns.has('pin_y');
+}
+
 // ---------------------------------------------------------------------------
 // 1. 배치도 구역 핀 (C1 학생 뷰 / A3 관리자 위험도 시각화)
 //    구역별 최고 긴급도로 핀 색을 정합니다.
@@ -16,6 +30,48 @@ function badRequest(message) {
 // ---------------------------------------------------------------------------
 exports.getZonePins = async (req, res, next) => {
   try {
+    const supportsReportPins = await getReportPinCoordinateSupport();
+    const buildingId = parseId(req.query.building_id);
+    const floorId = parseId(req.query.floor_id);
+
+    if (supportsReportPins) {
+      const rows = await sequelize.query(
+        `SELECT r.id AS report_id,
+                r.pin_x,
+                r.pin_y,
+                r.status,
+                r.urgency,
+                b.id AS building_id,
+                b.name AS building,
+                f.id AS floor_id,
+                f.name AS floor,
+                r.created_at
+           FROM reports r
+           JOIN buildings b ON b.id = r.building_id
+           JOIN floors    f ON f.id = r.floor_id
+          WHERE r.status <> 'done'
+            AND r.pin_x IS NOT NULL
+            AND r.pin_y IS NOT NULL
+            AND ($1::bigint IS NULL OR b.id = $1)
+            AND ($2::bigint IS NULL OR f.id = $2)
+          ORDER BY r.urgency ASC NULLS LAST, r.created_at DESC`,
+        {
+          bind: [buildingId, floorId],
+          type: QueryTypes.SELECT,
+        },
+      );
+
+      return res.status(200).json({
+        pins: rows.map((row) => ({
+          ...row,
+          report_id: Number(row.report_id),
+          building_id: Number(row.building_id),
+          floor_id: Number(row.floor_id),
+        })),
+        zones: [],
+      });
+    }
+
     const rows = await sequelize.query(
       `SELECT z.id   AS zone_id,     z.name AS zone,
               z.pin_x, z.pin_y,
@@ -34,12 +90,13 @@ exports.getZonePins = async (req, res, next) => {
         GROUP BY z.id, z.name, z.pin_x, z.pin_y, f.id, f.name, b.id, b.name
         ORDER BY MIN(r.urgency) ASC NULLS LAST, COUNT(*) DESC`,
       {
-        bind: [parseId(req.query.building_id), parseId(req.query.floor_id)],
+        bind: [buildingId, floorId],
         type: QueryTypes.SELECT,
       },
     );
 
     return res.status(200).json({
+      pins: [],
       zones: rows.map((row) => ({ ...row, open_count: Number(row.open_count) })),
     });
   } catch (error) {
