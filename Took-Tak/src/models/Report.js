@@ -21,7 +21,15 @@ const Report = sequelize.define('Report', {
   },
   zone_id: {
     type: DataTypes.BIGINT,
-    allowNull: false,
+    allowNull: true,
+  },
+  pin_x: {
+    type: DataTypes.DECIMAL(5, 2),
+    allowNull: true,
+  },
+  pin_y: {
+    type: DataTypes.DECIMAL(5, 2),
+    allowNull: true,
   },
   part: {
     type: DataTypes.TEXT,

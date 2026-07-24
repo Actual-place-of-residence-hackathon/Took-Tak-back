@@ -42,6 +42,12 @@ function badRequest(message) {
   return err;
 }
 
+function parseCoordinate(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) && num >= 0 && num <= 100 ? num : null;
+}
+
 function toUploadUrl(req, filename) {
   const configuredBaseUrl = (env.publicBaseUrl || '').replace(/\/$/, '');
   const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
@@ -91,9 +97,18 @@ exports.createReport = async (req, res, next) => {
     const buildingId = parseId(req.body.building_id);
     const floorId = parseId(req.body.floor_id);
     const zoneId = parseId(req.body.zone_id);
+    const pinX = parseCoordinate(req.body.pin_x);
+    const pinY = parseCoordinate(req.body.pin_y);
 
-    if (!buildingId || !floorId || !zoneId) {
-      return res.status(400).json({ message: 'building_id, floor_id, zone_id는 필수입니다.' });
+    if (!buildingId || !floorId) {
+      return res.status(400).json({ message: 'building_id, floor_id는 필수입니다.' });
+    }
+
+    const hasZoneSelection = zoneId !== null;
+    const hasFreeClick = pinX !== null && pinY !== null;
+
+    if (!hasZoneSelection && !hasFreeClick) {
+      return res.status(400).json({ message: 'zone_id 또는 pin_x/pin_y 중 하나는 필수입니다.' });
     }
 
     const description = parseDescription(req.body.description);
@@ -108,20 +123,22 @@ exports.createReport = async (req, res, next) => {
     const photoUrls = parsePhotoUrls(req.body.photoUrls, MAX_REPORT_PHOTOS);
 
     // 위치 계층 검증.
-    // reports 는 building/floor/zone 을 모두 들고 있지만 서로 맞는지 보장하는
-    // 제약이 없어서, 다른 건물의 zone_id 를 넣어도 스키마만으로는 안 막힙니다.
-    const zone = await Zone.findByPk(zoneId, {
-      include: [{
-        model: Floor,
-        as: 'floor',
-        include: [{ model: Building, as: 'building' }],
-      }],
-    });
+    // zone_id 가 있으면 기존 hotspot 방식, 없으면 자유 클릭 좌표를 사용합니다.
+    let zone = null;
+    if (hasZoneSelection) {
+      zone = await Zone.findByPk(zoneId, {
+        include: [{
+          model: Floor,
+          as: 'floor',
+          include: [{ model: Building, as: 'building' }],
+        }],
+      });
 
-    if (!zone || !zone.floor || !zone.floor.building
-      || !sameId(zone.floor_id, floorId)
-      || !sameId(zone.floor.building_id, buildingId)) {
-      return res.status(400).json({ message: '유효하지 않은 건물/층/구역 조합입니다.' });
+      if (!zone || !zone.floor || !zone.floor.building
+        || !sameId(zone.floor_id, floorId)
+        || !sameId(zone.floor.building_id, buildingId)) {
+        return res.status(400).json({ message: '유효하지 않은 건물/층/구역 조합입니다.' });
+      }
     }
 
     // AI 분류는 서버가 만듭니다.
@@ -145,6 +162,8 @@ exports.createReport = async (req, res, next) => {
         building_id: buildingId,
         floor_id: floorId,
         zone_id: zoneId,
+        pin_x: pinX,
+        pin_y: pinY,
         part,
         description: description.value,
         status: 'received',
