@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 
 const env = require('./config/env');
@@ -14,6 +15,7 @@ const app = express();
 
 app.use(cors({ origin: env.corsOrigin }));
 app.use(express.json({ limit: '1mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // 라우터 연결
 app.use('/api/auth', authRoutes);

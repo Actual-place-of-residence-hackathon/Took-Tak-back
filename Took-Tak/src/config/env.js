@@ -38,6 +38,7 @@ module.exports = {
   },
   jwtSecret: process.env.JWT_SECRET,
   adminSignupCode: process.env.ADMIN_SIGNUP_CODE,
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || '',
   bedrock: {
     // ⚠ 기본값을 서울(ap-northeast-2)로 두면 안 됩니다.
     // 서울·오사카에는 Bedrock Mantle 엔드포인트가 없어 실측 결과 "Connection error."만

@@ -1,4 +1,5 @@
 const { QueryTypes } = require('sequelize');
+const env = require('../config/env');
 const {
   sequelize,
   Report,
@@ -40,6 +41,45 @@ function badRequest(message) {
   err.status = 400;
   return err;
 }
+
+function toUploadUrl(req, filename) {
+  const configuredBaseUrl = (env.publicBaseUrl || '').replace(/\/$/, '');
+  const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = configuredBaseUrl || requestBaseUrl;
+  return `${baseUrl}/uploads/${filename}`;
+}
+
+// ---------------------------------------------------------------------------
+// 0. 이미지 업로드 (임시 blob URL → 백엔드 저장 URL)
+// ---------------------------------------------------------------------------
+exports.uploadReportImages = async (req, res, next) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (files.length === 0) {
+      return res.status(400).json({ message: '업로드할 이미지가 없습니다.' });
+    }
+
+    const photoUrls = files
+      .filter((file) => file && file.filename)
+      .map((file) => toUploadUrl(req, file.filename));
+
+    return res.status(200).json({ photoUrls });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.uploadActionImage = async (req, res, next) => {
+  try {
+    if (!req.file || !req.file.filename) {
+      return res.status(400).json({ message: '업로드할 조치 사진이 없습니다.' });
+    }
+
+    return res.status(200).json({ photoUrl: toUploadUrl(req, req.file.filename) });
+  } catch (error) {
+    return next(error);
+  }
+};
 
 // ---------------------------------------------------------------------------
 // 1. 신고 등록 (C3)
